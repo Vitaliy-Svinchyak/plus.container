@@ -26,20 +26,14 @@ Container.extend(Container.prototype, {
     _new: function () {
         this._resolved = new Container.Hash();
         this._register = new Container.Hash();
+        this._factories = new Container.Hash();
         this._dependencies = new Container.Hash();
         this._tags = new Container.Hash();
-
-        this._properties = new Container.Hash();
     },
     add: function (name, definition, dependencies) {
         return this.register(name, definition, dependencies);
     },
     register: function (name, definition, dependencies) {
-        // clean up
-        this.remove(name);
-
-        this._defineProperty(name);
-
         if (Container.isFunction(definition)) {
             this._register.set(name, definition);
             this._dependencies.set(name, dependencies || definition.$inject || []);
@@ -53,14 +47,17 @@ Container.extend(Container.prototype, {
         return this;
     },
     registerLazy: function (name, path, dependencies, tags) {
-        // clean up
-        this.remove(name);
-
-        this._defineProperty(name);
-
         this._dependencies.set(name, dependencies || []);
         this._tags.set(name, tags || []);
         this.set(name, path);
+
+        // to chain
+        return this;
+    },
+    registerLazyFactory: function (name, path, dependencies, tags) {
+        this._dependencies.set(name, dependencies || []);
+        this._tags.set(name, tags || []);
+        this._factories.set(name, path);
 
         // to chain
         return this;
@@ -72,8 +69,11 @@ Container.extend(Container.prototype, {
         }
 
         // lazy registering
-        if (this._resolved.has(name)) {
+        if (this._resolved.has(name) || this._factories.has(name)) {
             let object = this._resolved.get(name);
+            if (!object) {
+                object = this._factories.get(name);
+            }
 
             if (typeof object === 'string' && Container.isPath(object)) {
                 object = require(object);
@@ -82,6 +82,8 @@ Container.extend(Container.prototype, {
                 if (deps.length === 0 && object.$inject && object.$inject.length !== 0) {
                     deps = object.$inject;
                 }
+
+                this.remove(name);
                 this.register(name, object, deps || []);
             }
         }
@@ -105,6 +107,10 @@ Container.extend(Container.prototype, {
         this._resolved.set(name, definition);
     },
     create: function (name) {
+        if (this._factories.has(name)) {
+            return this._createFromFactory(name);
+        }
+
         if (!this._register.has(name)) {
             return null;
         }
@@ -157,14 +163,6 @@ Container.extend(Container.prototype, {
     load: function (options) {
         this.merge(Container.load(options));
     },
-    _defineProperty: function (name) {
-        let isNotDefined = !this._properties.has(name);
-        let isNotOwnMethod = !this[name] || true;
-
-        if (isNotDefined && isNotOwnMethod) {
-            this._properties.set(name, name);
-        }
-    },
     _createArrayInjected: function (name) {
         // get class
         let _class = this._register.get(name);
@@ -176,15 +174,31 @@ Container.extend(Container.prototype, {
         let args = [];
 
         // collect args
-        for (let i = 0; i < $inject.length; i++) {
-            args.push(this.get($inject[i]));
+        for (let injection of $inject) {
+            args.push(this.get(injection));
         }
 
-        // make creator with args
-        let creator = Container.makeCreator(_class, args);
+        // create
+        return new _class(...args);
+    },
+    _createFromFactory: function (name) {
+        // get class
+        let _class = this._register.get(name);
+
+        // get names
+        let $inject = this._dependencies.get(name) || [];
+
+        // args collection
+        let args = [];
+
+        // collect args
+        for (let injection of $inject) {
+            args.push(this.get(injection));
+        }
 
         // create
-        return new creator();
+
+        return _class(...args);
     },
 });
 
@@ -199,7 +213,7 @@ Container.extend(Container.Hash.prototype, {
         this.hash = hash || new Map();
     },
     get: function (name) {
-        return this.has(name) ? this.hash.get(name) : null;
+        return this.hash.get(name);
     },
     set: function (name, value) {
         this.hash.set(name, value);
@@ -208,7 +222,7 @@ Container.extend(Container.Hash.prototype, {
         return this.hash.has(name);
     },
     remove: function (name) {
-        return this.has(name) && this.hash.delete(name);
+        this.hash.delete(name);
     },
     each: function (fn) {
         for (let [name, tags] of this.hash) {
@@ -227,9 +241,6 @@ Container.extend(Container, {
     isFunction: function (value) {
         return value instanceof Function;
     },
-    isClass: function (value) {
-        return typeof value === 'function' && /^\s*class\s+/.test(value.toString());
-    },
     isArray: function (value) {
         return Object.prototype.toString.call(value) === '[object Array]';
     },
@@ -240,21 +251,6 @@ Container.extend(Container, {
         for (let i = 0; i < hash.length; i++) {
             fn(hash[i], i);
         }
-    },
-    makeCreator: function (_class, _args) {
-        if (Container.isClass(_class)) {
-            return function () {
-                return new _class(..._args);
-            };
-        }
-
-        function Bind () {
-            return _class.apply(this, _args);
-        }
-
-        Bind.prototype = _class.prototype;
-
-        return Bind;
     },
 });
 
