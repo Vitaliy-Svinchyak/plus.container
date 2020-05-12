@@ -77,6 +77,10 @@ Container.extend(Container.prototype, {
 
             if (typeof object === 'string' && Container.isPath(object)) {
                 object = require(object);
+                if (object.default) {
+                  object = object.default
+                }
+
                 let deps = this._dependencies.get(name);
 
                 if (deps.length === 0 && object.$inject && object.$inject.length !== 0) {
